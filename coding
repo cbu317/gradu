@@ -1,0 +1,417 @@
+import webiopi
+from time import sleep
+
+
+# ultar senser import
+import RPi.GPIO as gpio
+import time, threading, requests
+
+
+# Enable debug output
+# webiopi.setDebug()
+GPIO = webiopi.GPIO
+
+
+# initiales setzen der Beschleunigung
+acceleration = 0
+turnacceleration = 0
+# auf der Stelle drehen = false
+spotturn = "false"
+	
+
+
+MAXSPEED = 100
+MAXSTEERSPEED = 50
+motorDriveLForwardPin = 19 #7
+motorDriveLReversePin = 13 #11
+motorDriveRForwardPin = 6 #13
+motorDriveRReversePin = 5 #15
+motorDriveLPWM = 26 #29
+motorDriveRPWM = 0 #31
+generalPWM = 0.4
+turboPWM = 0.8
+motorSpeed = generalPWM
+
+
+# ultar senser pin setting
+gpio.setmode(gpio.BCM)
+
+
+trig = 20
+echo = 21
+
+
+gpio.setup(trig, gpio.OUT)
+gpio.setup(echo, gpio.IN)
+
+
+checkDistanceFlag = 0
+maxDistance = 30
+
+
+#setup function is called automatically at WebIoPi startup
+def setup():
+	GPIO.setFunction(motorDriveLForwardPin, GPIO.OUT)
+	GPIO.setFunction(motorDriveLReversePin, GPIO.OUT)
+	GPIO.setFunction(motorDriveRForwardPin, GPIO.OUT)
+	GPIO.setFunction(motorDriveRReversePin, GPIO.OUT)
+	GPIO.setFunction(motorDriveLPWM, GPIO.PWM)
+	GPIO.setFunction(motorDriveRPWM, GPIO.PWM)
+
+
+
+def initiate():
+    global acceleration
+    global turnacceleration
+    global motorDriveSpeed
+    global motorSteerSpeed
+    global speedstep
+    global maxspeed
+    global maxsteerspeed	
+    global minspeed
+
+	
+    spotturn = "false"
+    acceleration = 0
+    turnacceleration = 0
+    motorDriveSpeed = 0
+    motorSteerSpeed = 0
+    speedstep = 10
+    maxspeed = 200
+    maxsteerspeed = 50
+    minspeed = 0
+
+
+def reverse():
+    GPIO.digitalWrite(motorDriveLForwardPin, GPIO.HIGH)
+    GPIO.digitalWrite(motorDriveLReversePin, GPIO.LOW)
+    GPIO.digitalWrite(motorDriveRForwardPin, GPIO.HIGH)
+    GPIO.digitalWrite(motorDriveRReversePin, GPIO.LOW)
+	
+
+def  forward():
+    GPIO.digitalWrite(motorDriveLForwardPin, GPIO.LOW)
+    GPIO.digitalWrite(motorDriveLReversePin, GPIO.HIGH)
+    GPIO.digitalWrite(motorDriveRForwardPin, GPIO.LOW)
+    GPIO.digitalWrite(motorDriveRReversePin, GPIO.HIGH)
+
+
+def  left():
+    GPIO.digitalWrite(motorDriveLForwardPin, GPIO.LOW)
+    GPIO.digitalWrite(motorDriveLReversePin, GPIO.HIGH)
+    GPIO.digitalWrite(motorDriveRForwardPin, GPIO.HIGH)
+    GPIO.digitalWrite(motorDriveRReversePin, GPIO.LOW)
+
+
+def  right():
+    GPIO.digitalWrite(motorDriveRForwardPin, GPIO.LOW)
+    GPIO.digitalWrite(motorDriveRReversePin, GPIO.HIGH)
+    GPIO.digitalWrite(motorDriveLForwardPin, GPIO.HIGH)
+    GPIO.digitalWrite(motorDriveLReversePin, GPIO.LOW)
+
+
+def resetSteer():
+	GPIO.digitalWrite(motorDriveRForwardPin, GPIO.LOW)
+	GPIO.digitalWrite(motorDriveRReversePin, GPIO.LOW)
+	GPIO.digitalWrite(motorDriveLForwardPin, GPIO.LOW)
+	GPIO.digitalWrite(motorDriveLReversePin, GPIO.LOW)
+
+
+# stop the motors
+def stop():
+	GPIO.digitalWrite(motorDriveLForwardPin, GPIO.LOW)
+	GPIO.digitalWrite(motorDriveLReversePin, GPIO.LOW)
+	GPIO.digitalWrite(motorDriveRForwardPin, GPIO.LOW)
+	GPIO.digitalWrite(motorDriveRReversePin, GPIO.LOW)
+	# motorLspeed, motorRspeed, acceleration
+	initiate()
+	return 0, 0, 0
+
+
+# stop the motors
+def stopSteer():
+	GPIO.digitalWrite(motorDriveRForwardPin, GPIO.LOW)
+	GPIO.digitalWrite(motorDriveRReversePin, GPIO.LOW)
+	GPIO.digitalWrite(motorDriveLForwardPin, GPIO.LOW)
+	GPIO.digitalWrite(motorDriveLReversePin, GPIO.LOW)
+
+
+# This functions sets the motor speed.
+def setacceleration(value):
+	global motorDriveSpeed
+	global motorSteerSpeed
+	global acceleration
+	global minspeed
+	global maxspeed
+	
+
+	acceleration = acceleration + value
+	
+
+	minspeed, maxsteerspeed = getMinMaxSpeed()
+	
+
+	#Set Min and Max values for acceleration
+	if(acceleration < -MAXSPEED):
+		acceleration = -MAXSPEED
+	
+
+	if(acceleration > MAXSPEED):
+		acceleration = MAXSPEED	
+	
+	if(acceleration > 0):
+		# drive forward
+		forward()
+		motorDriveSpeed = acceleration
+		print("forward: ", motorDriveSpeed)
+	elif(acceleration == 0):
+		# stopp motors
+		motorDriveSpeed = acceleration
+		motorDriveSpeed, motorSteerSpeed, acceleration = stop()
+		print("stop: ", motorDriveSpeed, motorSteerSpeed)
+	else:
+		# drive backward
+		reverse()
+		motorDriveSpeed = (acceleration * -1)
+		print("backward: ", motorDriveSpeed)
+	
+
+	motorDriveSpeed, motorSteerSpeed = check_motorspeed(motorDriveSpeed, motorSteerSpeed)
+	print("check: ", motorDriveSpeed, motorSteerSpeed)
+
+
+# This functions sets the motor speed.
+def setturnacceleration(value):
+	global motorDriveSpeed
+	global motorSteerSpeed
+	global turnacceleration
+	global minspeed
+	global maxsteerspeed
+	
+
+	turnacceleration = turnacceleration + value
+	
+
+	minspeed, maxsteerspeed = getMinMaxSteerSpeed()
+	
+
+	#Set Min and Max values for acceleration
+	if(turnacceleration < -MAXSTEERSPEED):
+		turnacceleration = -MAXSTEERSPEED
+	
+
+	if(turnacceleration > MAXSTEERSPEED):
+		turnacceleration = MAXSTEERSPEED	
+	
+
+	if(turnacceleration > 0):
+		# drive forward
+		left()
+		motorSteerSpeed = turnacceleration
+		print("forward: ", motorSteerSpeed)
+	elif(turnacceleration == 0):
+		# stopp motors
+		motorSteerSpeed = turnacceleration
+		motorSteerSpeed, turnacceleration = stopSteer()
+		print("stop: ", motorSteerSpeed)
+	else:
+		# drive backward
+		right()
+		motorSteerSpeed = (turnacceleration * -1)
+		print("backward: ", motorSteerSpeed)
+	
+
+	motorDriveSpeed, motorSteerSpeed = check_motorspeed(motorDriveSpeed, motorSteerSpeed)	
+	print("check: ", motorDriveSpeed, motorSteerSpeed)
+
+	
+
+# check the motorspeed if it is correct and in max/min range
+def check_motorspeed(motorDriveSpeed, motorSteerSpeed):
+	if (motorDriveSpeed < minspeed):
+		motorDriveSpeed = minspeed
+
+
+	if (motorDriveSpeed > maxspeed):
+		motorDriveSpeed = maxspeed
+		
+
+	if (motorSteerSpeed < minspeed):
+		motorSteerSpeed = minspeed
+
+
+	if (motorSteerSpeed > maxspeed):
+		motorSteerSpee
+d = maxspeed	
+		
+	return motorDriveSpeed, motorSteerSpeed
+
+
+# Set Min Max Speed
+def getMinMaxSpeed():
+	minspeed = 0
+	maxspeed = 200
+	return minspeed, maxspeed
+
+
+# Set Min Max Speed
+def getMinMaxSteerSpeed():
+	minspeed = 0
+	maxsteerspeed = 200
+	return minspeed, maxsteerspeed
+	
+
+# Get the motor speed
+def getMotorSpeed():
+	global motorDriveSpeed
+	global motorSteerSpeed
+	
+	return motorDriveSpeed, motorSteerSpeed
+
+
+def getMotorSpeedStep():
+	return 50	
+
+
+def getSteerMotorSpeedStep():
+	return 50		
+	
+
+@webiopi.macro
+def ButtonForward():
+    global checkDistanceFlag # flag is 0 , cannot forward.
+    global motorSpeed # check turbo flag, motor PWM 0.4 or 0.8 
+    if (checkDistanceFlag == 0):
+        fowardAcc = 0
+        fowardAcc = getMotorSpeedStep()
+
+
+        setacceleration(fowardAcc)
+	
+
+        motorDriveSpeed, motorSteerSpeed = getMotorSpeed()
+	
+        GPIO.pulseRatio(motorDriveLPWM, motorSpeed)
+        GPIO.pulseRatio(motorDriveRPWM, motorSpeed)
+        print("ButtonForward")
+	
+
+@webiopi.macro
+def ButtonReverse():
+        global motorSpeed
+        backwardAcc = 0
+        backwardAcc = getMotorSpeedStep()
+
+
+        setacceleration((backwardAcc*-1))
+	
+
+        motorDriveSpeed, motorSteerSpeed = getMotorSpeed()
+	
+		
+        GPIO.pulseRatio(motorDriveLPWM, motorSpeed)
+        GPIO.pulseRatio(motorDriveRPWM, motorSpeed)
+        print("ButtonReverse\n")
+
+
+@webiopi.macro
+def ButtonTurnLeft():
+        global motorSpeed
+        left()
+        GPIO.pulseRatio(motorDriveRPWM, motorSpeed)
+        GPIO.pulseRatio(motorDriveLPWM, motorSpeed)
+        print("ButtonTurnLeft\n")
+	
+
+@webiopi.macro
+def ButtonTurnRight():
+        global motorSpeed
+        right()
+        GPIO.pulseRatio(motorDriveLPWM, motorSpeed)
+        GPIO.pulseRatio(motorDriveRPWM, motorSpeed)
+        print("ButtonTurnRight\n")
+
+
+@webiopi.macro
+def ButtonStop():	
+	print("ButtonStop\n")
+	stop()
+
+
+@webiopi.macro
+def isTurboFlag(turboFlag):
+    if(turboFlag == 'true'):
+        motorSpeed = turboPWM
+    else:
+        motorSpeed = generalPWM
+
+    print("turbo flag : ",turboFlag,"motor pwm : ",motorSpeed);
+
+# ulstra sensor thread class
+class checkUltraSensor(threading.Thread):
+    def __init__(self):
+        super(checkUltraSensor, self).__init__()
+        self.stop = threading.Event()
+
+
+    def run(self):
+        print("sensor tread start!!")
+
+
+        global checkDistanceFlag
+
+
+        while True:
+            gpio.output(trig, False)
+            time.sleep(0.5)
+    
+
+            gpio.output(trig, True)
+            time.sleep(0.00001)
+            gpio.output(trig, False)
+    
+
+            while gpio.input(echo) == 0:
+                pulse_start = time.time()
+    
+
+            while gpio.input(echo) == 1:
+                pulse_end = time.time()
+    
+
+            pulse_duration = pulse_end - pulse_start
+            distance = pulse_duration * 17000
+            distance = round(distance, 2)
+    
+
+            if(distance <= maxDistance):
+                checkDistanceFlag = 1
+                print('maxDistance over!! ', checkDistanceFlag)
+                ButtonStop()
+            else:
+                checkDistanceFlag = 0
+                print('Flag = ',checkDistanceFlag)
+
+
+            print("Distance : ",distance,"cm")
+    
+
+    def stop(self):
+        self.stopped = True
+        print("Exit Thread")
+
+    def stopped(self):
+        return self._stop.isSet()
+
+try:
+    # ultra sensor
+    t = checkUltraSensor()
+    t.start()
+    
+
+    initiate()
+
+
+except KeyboardInterrupt:
+    GPIO.cleanup()
+    t.stop()
